@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>compile</title></head>
+<body>compiling…
+<script src="../vendor/babel.min.js"></script>
+<script>
+fetch('../app.jsx')
+  .then(r => r.text())
+  .then(src => {
+    var out = Babel.transform(src, { presets: [['react', { runtime: 'classic' }]] }).code;
+    return fetch('/save?path=app.js', { method: 'POST', body: out });
+  })
+  .then(r => r.text())
+  .then(t => { document.body.textContent = (t === 'saved') ? 'COMPILE_DONE' : 'COMPILE_FAIL ' + t; })
+  .catch(e => { document.body.textContent = 'COMPILE_ERR ' + e; });
+</script>
+</body>
+</html>

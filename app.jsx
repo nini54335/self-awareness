@@ -1,0 +1,990 @@
+const { useState, useEffect, useMemo } = React;
+
+/* ================= 常量与文案 ================= */
+const SLOGAN = '看见困住你的信念，选择你想要的行动';
+
+const BELIEF_OPTIONS = [
+  { key: 'self_deny',   label: '自我否定：我不够好、我能力差、我总是失败' },
+  { key: 'catastrophe', label: '灾难化预判：这件事会带来很糟的后果，一切都会完蛋' },
+  { key: 'past',        label: '归因过去：因为过去的经历，所以我注定会遇到这种困境' },
+  { key: 'please',      label: '讨好型信念：我不能拒绝别人，我必须得到他人认可' },
+  { key: 'binary',      label: '非黑即白：要么完美，要么彻底失败' },
+  { key: 'other',       label: '其他（可自行填写）' },
+];
+
+const BRANCH_TIPS = {
+  self_deny:   '这是客观事实，还是你的主观解读？就像那只被拴住的大象，这类信念往往是过往留下的枷锁，不等于你的真实能力。试着想一想：放下“我不行”这个想法，你想要拥有什么样的状态？',
+  catastrophe: '我们很容易脑补最坏结局。这个糟糕结果是确定会发生，还只是猜想？想一想：你紧抓这份担忧，是在守护什么样的期待？',
+  past:        '原因视角可以帮你理解感受。但如果一直停留在“因为过去，我只能这样”，容易陷入无力。切换视角看看：你希望自己接下来是什么状态？',
+  please:      '你很看重他人的评价。问问自己：你渴望获得认可背后，真正想要的是什么？这份期待，是否一定要靠讨好别人才能得到？',
+  binary:      '生活很少是非此即彼。这件事除了完美或彻底失败，有没有中间的可能性？坚持这种极端想法，它在帮你维持什么样的感受？',
+  other:       '观察这个信念。它是事实还是你的解读？跳出这个想法看一看：你希望自己走向何方？',
+};
+
+const BELIEF_LABELS = Object.fromEntries(BELIEF_OPTIONS.map(o => [o.key, o.label]));
+const beliefShort = k => BELIEF_LABELS[k] ? BELIEF_LABELS[k].split('：')[0] : k;
+
+/* 彩色标签色板：按文字 hash 取色，同一标签颜色固定 */
+const TAG_COLORS = [
+  { bg: '#e4ede2', text: '#557055' },
+  { bg: '#f3eadd', text: '#8a6b47' },
+  { bg: '#e2ebf2', text: '#4d6a85' },
+  { bg: '#f2e4ec', text: '#8a5470' },
+  { bg: '#eeeddf', text: '#767051' },
+  { bg: '#e7e4f1', text: '#615889' },
+];
+const tagColor = t => {
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+  return TAG_COLORS[h % TAG_COLORS.length];
+};
+
+/* ================= 本地存储工具 ================= */
+const store = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+    catch { return fallback; }
+  },
+  set(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+};
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const fmtTime = ts => new Date(ts).toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+
+/* ================= 通用小组件 ================= */
+function Modal({ children, onClose, wide }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{background:'rgba(74,79,74,0.28)'}}>
+      <div className={`bg-paper rounded-2xl shadow-xl border border-sage-100 w-full ${wide ? 'max-w-2xl' : 'max-w-md'} max-h-[88vh] overflow-y-auto`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ children, onClick, variant = 'primary', className = '', disabled }) {
+  const styles = {
+    primary: 'bg-sage-500 text-white hover:bg-sage-600',
+    ghost: 'bg-white text-sage-600 border border-sage-200 hover:bg-sage-50',
+    text: 'text-sage-600 hover:text-sage-700 underline underline-offset-4',
+    danger: 'text-red-400 hover:text-red-500 text-sm',
+  };
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className={`px-5 py-2.5 rounded-full text-sm tracking-wide transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]} ${className}`}>
+      {children}
+    </button>
+  );
+}
+
+function Textarea({ value, onChange, placeholder, rows = 4 }) {
+  return (
+    <textarea value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
+      className="w-full bg-white border border-sage-100 rounded-xl p-4 text-sm leading-relaxed placeholder:text-soft/60 focus:border-sage-300 resize-y" />
+  );
+}
+
+function Tag({ children, onRemove }) {
+  return (
+    <span className="inline-flex items-center gap-1 bg-sage-50 text-sage-600 text-xs px-2.5 py-1 rounded-full border border-sage-100">
+      {children}
+      {onRemove && <button onClick={onRemove} className="text-sage-300 hover:text-sage-500">×</button>}
+    </span>
+  );
+}
+
+/* 卡片左上角彩色标签色块 */
+function ColorTag({ children }) {
+  const c = tagColor(String(children));
+  return (
+    <span className="inline-block text-[11px] leading-5 px-2 rounded-md" style={{ background: c.bg, color: c.text }}>
+      {children}
+    </span>
+  );
+}
+
+/* ================= 欢迎弹窗 ================= */
+function WelcomeModal({ onEnter }) {
+  const [checked, setChecked] = useState(false);
+  return (
+    <Modal wide>
+      <div className="p-8 md:p-10">
+        <h1 className="font-serif text-2xl md:text-3xl text-sage-700 text-center">欢迎来到觉察练习空间</h1>
+        <p className="text-center text-soft mt-3 text-sm tracking-widest">Slogan：{SLOGAN}</p>
+
+        <div className="mt-8 space-y-5 text-sm leading-7 text-ink">
+          <p>本网站是思维觉察练习工具，核心参考《被讨厌的勇气》阿德勒心理学，辅以信念觉察、事实与想法区分练习，帮助你觉察限制性信念，练习目的视角思考，把想法转化为行动。</p>
+          <div>
+            <p className="mb-1">你可以：</p>
+            <ul className="space-y-1 text-ink/90">
+              <li>• 填写觉察练习表单，记录事件、情绪与想法</li>
+              <li>• 存档回看你的全部觉察记录（游客仅本地保存，登录可云端同步）</li>
+              <li>• 在社区匿名/实名分享你的觉察复盘，互相启发</li>
+            </ul>
+          </div>
+          <div className="bg-sage-50 border border-sage-100 rounded-xl p-4">
+            <p className="text-sage-700 mb-1">⚠️ 重要提示：</p>
+            <p>本网站仅作为自我觉察练习工具，不是心理咨询，无法替代专业心理治疗。</p>
+            <p>如果你承受强烈痛苦、有自伤念头，请联系学校心理老师或专业心理机构。18岁以下建议在信任成年人陪伴下使用。</p>
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2.5 mt-8 cursor-pointer select-none justify-center">
+          <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)}
+            className="w-4 h-4 accent-sage-500" />
+          <span className="text-sm">我已阅读并理解，同意继续使用</span>
+        </label>
+        <div className="text-center mt-5">
+          <Btn onClick={onEnter} disabled={!checked} className="px-10">进入网站</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ================= 登录弹窗 ================= */
+function LoginModal({ onClose, onLogin }) {
+  const [email, setEmail] = useState('');
+  const [pwd, setPwd] = useState('');
+  const [err, setErr] = useState('');
+
+  const submit = () => {
+    if (!/^\S+@\S+\.\S+$/.test(email)) return setErr('请输入有效的邮箱地址');
+    if (pwd.length < 6) return setErr('密码至少 6 位');
+    const users = store.get('sa_users', {});
+    if (users[email] && users[email].pwd !== pwd) return setErr('该邮箱已注册，密码不正确');
+    if (!users[email]) { users[email] = { pwd }; store.set('sa_users', users); }
+    const user = { email, nickname: email.split('@')[0] };
+    store.set('sa_user', user);
+    onLogin(user);
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="p-8">
+        <h2 className="font-serif text-xl text-sage-700 text-center">邮箱登录</h2>
+        <p className="text-xs text-soft text-center mt-2">邮箱 + 密码即可，首次使用将自动注册</p>
+        <div className="mt-6 space-y-3">
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="邮箱"
+            className="w-full bg-white border border-sage-100 rounded-xl px-4 py-3 text-sm focus:border-sage-300" />
+          <input type="password" value={pwd} onChange={e => setPwd(e.target.value)} placeholder="密码（至少 6 位）"
+            className="w-full bg-white border border-sage-100 rounded-xl px-4 py-3 text-sm focus:border-sage-300"
+            onKeyDown={e => e.key === 'Enter' && submit()} />
+          {err && <p className="text-xs text-red-400">{err}</p>}
+        </div>
+        <div className="flex gap-3 mt-6 justify-center">
+          <Btn variant="ghost" onClick={onClose}>取消</Btn>
+          <Btn onClick={submit}>登录 / 注册</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ================= 顶部导航 ================= */
+function Nav({ page, setPage, user, onLoginClick, onLogout }) {
+  const items = [
+    { key: 'archive', label: '我的存档' },
+    { key: 'practice', label: '觉察练习' },
+    { key: 'community', label: '社区' },
+  ];
+  return (
+    <header className="fixed top-0 inset-x-0 z-40 bg-mist/90 backdrop-blur border-b border-sage-100">
+      <div className="max-w-5xl mx-auto px-4 h-16 grid grid-cols-3 items-center">
+        <div className="text-xs md:text-sm text-soft tracking-wider truncate pr-2">{SLOGAN}</div>
+        <nav className="flex justify-center gap-1 md:gap-2">
+          {items.map(it => (
+            <button key={it.key} onClick={() => setPage(it.key)}
+              className={`px-3 md:px-4 py-1.5 rounded-full text-sm transition-colors whitespace-nowrap ${
+                page === it.key ? 'bg-sage-100 text-sage-700' : 'text-ink/70 hover:text-sage-600'}`}>
+              {it.label}
+            </button>
+          ))}
+        </nav>
+        <div className="flex justify-end items-center gap-2">
+          {user ? (
+            <>
+              <span className="hidden md:inline text-xs text-soft truncate max-w-[8rem]">{user.nickname}</span>
+              <button onClick={onLogout} className="text-xs text-sage-500 hover:text-sage-700 whitespace-nowrap">退出</button>
+            </>
+          ) : (
+            <button onClick={onLoginClick} className="text-xs text-sage-500 hover:text-sage-700 whitespace-nowrap">登录</button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ================= 模块1：觉察练习 ================= */
+const emptyForm = { event: '', emotions: '', thoughts: '', beliefs: [], otherBelief: '', reflection: '', reframe: '', action: '' };
+const PRACTICE_NAV = ['① 客观记录事件', '② 写下当下的情绪', '③ 写下想法与信念', '④ 切换视角思考', '⑤ 重构后的想法'];
+
+function PracticePage({ onSaved, goArchive }) {
+  const [stage, setStage] = useState('intro'); // intro | step1..5 | done
+  const [form, setForm] = useState({ ...emptyForm });
+  const [showFactTip, setShowFactTip] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const toggleBelief = key => setForm(f => ({
+    ...f,
+    beliefs: f.beliefs.includes(key) ? f.beliefs.filter(b => b !== key) : [...f.beliefs, key]
+  }));
+
+  const stepNum = stage.startsWith('step') ? Number(stage.slice(4)) : 0;
+  const goTo = n => {
+    setStage('step' + n);
+    setTimeout(() => {
+      const el = document.getElementById('practice-step-' + n);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  };
+
+  const save = () => {
+    const records = store.get('sa_records', []);
+    const rec = { ...form, id: uid(), tags: [], musing: '', musingSavedAt: null, createdAt: Date.now(), updatedAt: Date.now() };
+    records.unshift(rec);
+    store.set('sa_records', records);
+    setStage('done');
+  };
+
+  const restart = () => { setForm({ ...emptyForm }); setStage('intro'); };
+
+  /* 进入新步骤后，平滑滚动到对应表单位置 */
+  useEffect(() => {
+    if (!stage.startsWith('step')) return;
+    const el = document.getElementById('practice-step-' + stage.slice(4));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [stage]);
+
+  /* 步骤导航跳转 */
+  const scrollToStep = n => {
+    const el = document.getElementById('practice-step-' + n);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  /* ---- 初始问候 ---- */
+  if (stage === 'intro') {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-6">
+        <h1 className="font-serif text-2xl md:text-3xl text-ink leading-relaxed">你好！今天发生了什么事？<br />你有什么想说的吗？</h1>
+        <Btn className="mt-10 px-8" onClick={() => setStage('step1')}>开始觉察练习</Btn>
+      </div>
+    );
+  }
+
+  /* ---- 保存成功 ---- */
+  if (stage === 'done') {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center px-4">
+        <div className="bg-paper border border-sage-100 rounded-2xl p-8 md:p-10 max-w-md w-full text-center shadow-sm">
+          <p className="text-lg text-sage-700">✅ 觉察记录已保存到你的存档。</p>
+          <div className="mt-8 flex flex-col gap-3">
+            <Btn variant="ghost" onClick={goArchive}>返回存档页查看</Btn>
+            <Btn onClick={() => setPublishOpen(true)}>发布到社区</Btn>
+            <Btn variant="ghost" onClick={restart}>新建一次觉察练习</Btn>
+          </div>
+        </div>
+        {publishOpen && <PublishModal form={form} onClose={() => setPublishOpen(false)} />}
+      </div>
+    );
+  }
+
+  /* ---- 分步表单 ---- */
+  return (
+    <div className="max-w-xl mx-auto px-4 py-10">
+      {/* 步骤导航：已到达的步骤可点击跳转，内容保留可直接编辑 */}
+      <div className="flex flex-wrap justify-center gap-2 mb-10">
+        {PRACTICE_NAV.map((label, i) => {
+          const n = i + 1;
+          const reached = n <= stepNum;
+          return (
+            <button key={n} disabled={!reached} onClick={() => scrollToStep(n)}
+              className={`px-3 py-1.5 rounded-full text-xs border transition-colors ${
+                n === stepNum ? 'bg-sage-100 text-sage-700 border-sage-300'
+                : reached ? 'bg-white text-sage-600 border-sage-200 hover:bg-sage-50'
+                : 'text-soft/50 border-sage-100 cursor-not-allowed'}`}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="space-y-6">
+      {stepNum >= 1 && (
+        <div id="practice-step-1" className="scroll-mt-20">
+        <StepCard title="① 客观记录发生的事件">
+          <p className="text-sm text-soft leading-relaxed">只写下客观发生的事实，尽量不加入评价、猜测或情绪。</p>
+          <div className="bg-sage-50 rounded-xl p-4 text-sm space-y-1.5 border border-sage-100">
+            <p className="text-soft text-xs mb-1">示例参考：</p>
+            <p className="text-sage-700">✅ 小组作业，我的方案被组员否决。</p>
+            <p className="text-ink/50">❌ 组员看不起我，直接否定我的想法。</p>
+          </div>
+          <Textarea value={form.event} onChange={v => set('event', v)} placeholder="客观描述发生了什么……" rows={5} />
+          <StepFooter><Btn onClick={() => goTo(2)} disabled={!form.event.trim()}>下一步</Btn></StepFooter>
+        </StepCard>
+        </div>
+      )}
+
+      {stepNum >= 2 && (
+        <div id="practice-step-2" className="scroll-mt-20">
+        <StepCard title="② 写下当下的情绪">
+          <p className="text-sm text-soft leading-relaxed">觉察此刻你的感受，情绪没有好坏，允许它存在。可以写多个。</p>
+          <div className="bg-sage-50 rounded-xl p-4 text-sm border border-sage-100">
+            <p className="text-soft text-xs mb-1">示例参考：</p>
+            <p className="text-sage-700">失落、委屈、不安、尴尬。</p>
+          </div>
+          <Textarea value={form.emotions} onChange={v => set('emotions', v)} placeholder="此刻的情绪……" />
+          <StepFooter><Btn onClick={() => goTo(3)} disabled={!form.emotions.trim()}>下一步</Btn></StepFooter>
+        </StepCard>
+        </div>
+      )}
+
+      {stepNum >= 3 && (
+        <div id="practice-step-3" className="scroll-mt-20">
+        <StepCard title="③ 捕捉脑海里自动冒出来的想法与信念">
+          <p className="text-sm text-soft leading-relaxed">
+            这件事发生后，第一时间冒出来的念头是什么？很多困住我们的限制性信念，就藏在这里。
+          </p>
+          <p className="text-xs text-soft">
+            提示：
+            <button onClick={() => setShowFactTip(s => !s)}
+              className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-sage-300 text-sage-500 text-[10px] align-middle mx-1 hover:bg-sage-50">?</button>
+            {showFactTip && (
+              <span className="block mt-2 bg-sage-50 border border-sage-100 rounded-xl p-3 leading-relaxed text-ink/80">
+                区分【事实】和【想法】。事实可被第三方验证；想法是你对事件的解读，不一定等于真相。
+              </span>
+            )}
+          </p>
+          <Textarea value={form.thoughts} onChange={v => set('thoughts', v)} placeholder="脑海里自动冒出来的想法……" />
+          <div className="space-y-2.5">
+            {BELIEF_OPTIONS.map(o => (
+              <label key={o.key} className="flex items-start gap-2.5 cursor-pointer text-sm text-ink/85 leading-relaxed">
+                <input type="checkbox" checked={form.beliefs.includes(o.key)} onChange={() => toggleBelief(o.key)}
+                  className="mt-1 w-4 h-4 accent-sage-500 shrink-0" />
+                {o.label}
+              </label>
+            ))}
+            {form.beliefs.includes('other') && (
+              <input value={form.otherBelief} onChange={e => set('otherBelief', e.target.value)} placeholder="请填写其他信念……"
+                className="w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300 ml-6" style={{width:'calc(100% - 1.5rem)'}} />
+            )}
+          </div>
+          <StepFooter><Btn onClick={() => goTo(4)} disabled={!form.thoughts.trim()}>下一步</Btn></StepFooter>
+        </StepCard>
+        </div>
+      )}
+
+      {stepNum >= 4 && (
+        <div id="practice-step-4" className="scroll-mt-20">
+        <StepCard title="④ 两种视角，试着切换思考">
+          <div className="text-sm leading-7 text-ink/90 space-y-3">
+            <p>两种视角没有绝对对错。向后看可以理解感受来源；向前看，帮你找到想要的方向，拿回行动的主动权。</p>
+            <ul className="space-y-1">
+              <li>- 向后看（原因视角）：是什么带来我当下的感受？</li>
+              <li>- 向前看（目的视角）：我在借助这份感受或想法，去往什么样的状态？（阿德勒目的论）</li>
+            </ul>
+          </div>
+          {form.beliefs.length > 0 && (
+            <div className="space-y-3">
+              {form.beliefs.map(k => (
+                <div key={k} className="bg-sage-50 border border-sage-100 rounded-xl p-4 text-sm leading-relaxed">
+                  <p className="text-xs text-sage-500 mb-1.5">【{BELIEF_LABELS[k].split('：')[0]}】分支提示：</p>
+                  <p className="text-ink/90">{BRANCH_TIPS[k]}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <Textarea value={form.reflection} onChange={v => set('reflection', v)} placeholder="试着切换视角，写下你的思考……" rows={5} />
+          <StepFooter><Btn onClick={() => goTo(5)} disabled={!form.reflection.trim()}>下一步</Btn></StepFooter>
+        </StepCard>
+        </div>
+      )}
+
+      {stepNum >= 5 && (
+        <div id="practice-step-5" className="scroll-mt-20">
+        <StepCard title="⑤ 重构想法，写下微小行动">
+          <div className="text-sm leading-7 text-ink/90 space-y-2">
+            <p>第一部分：写下新的、更贴合现实的想法，替换原本困住你的限制性信念。</p>
+            <p>第二部分：写下微小、今天或明天就能落地的行动。拒绝宏大口号，行动越小越容易实践。</p>
+          </div>
+          <div className="bg-sage-50 rounded-xl p-4 text-sm space-y-1.5 border border-sage-100 text-ink/80">
+            <p className="text-soft text-xs mb-1">示例：</p>
+            <p>重构想法：一次方案被否定 ≠ 我能力很差，只是这个方案不适合本次小组任务。</p>
+            <p>微小行动：明天找组员简单问问，他们不认可方案的具体原因。</p>
+          </div>
+          <div>
+            <label className="block text-xs text-sage-600 mb-1.5">【重构后的想法】</label>
+            <Textarea value={form.reframe} onChange={v => set('reframe', v)} placeholder="新的、更贴合现实的想法……" />
+          </div>
+          <div>
+            <label className="block text-xs text-sage-600 mb-1.5">【微小可执行行动】</label>
+            <Textarea value={form.action} onChange={v => set('action', v)} placeholder="今天或明天就能做的一件小事……" />
+          </div>
+          <StepFooter>
+            <Btn onClick={save} disabled={!form.reframe.trim() || !form.action.trim()}>保存到我的存档</Btn>
+          </StepFooter>
+        </StepCard>
+        </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
+function StepCard({ title, children }) {
+  return (
+    <div className="bg-paper border border-sage-100 rounded-2xl p-6 md:p-8 shadow-sm space-y-5">
+      <h2 className="font-serif text-lg md:text-xl text-sage-700">{title}</h2>
+      {children}
+    </div>
+  );
+}
+function StepFooter({ children }) {
+  return <div className="pt-2 text-right">{children}</div>;
+}
+
+/* ================= 发布到社区弹窗 ================= */
+function PublishModal({ form, onClose }) {
+  const user = store.get('sa_user', null);
+  const [isPublic, setIsPublic] = useState(true);
+  const [anonymous, setAnonymous] = useState(true);
+  const [nickname, setNickname] = useState(user ? user.nickname : '');
+  const [allowComments, setAllowComments] = useState(true);
+  const [showMusing, setShowMusing] = useState(true);
+  const [title, setTitle] = useState(form.event ? form.event.split('\n')[0].slice(0, 30) : '');
+  const [done, setDone] = useState(false);
+
+  if (!user) {
+    return (
+      <Modal onClose={onClose}>
+        <div className="p-8 text-center space-y-4">
+          <p className="text-sm leading-relaxed text-ink">游客模式不能发布内容到社区。<br />请先登录后再发布。</p>
+          <Btn variant="ghost" onClick={onClose}>知道了</Btn>
+        </div>
+      </Modal>
+    );
+  }
+
+  const publish = () => {
+    const posts = store.get('sa_posts', []);
+    posts.unshift({
+      id: uid(), form: { ...form }, public: isPublic,
+      title: title.trim() || (form.event ? form.event.split('\n')[0].slice(0, 30) : '觉察笔记'),
+      musing: form.musing || '', showMusing,
+      nickname: anonymous ? '匿名' : (nickname.trim() || user.nickname),
+      anonymous, allowComments, comments: [], pinnedCommentId: null, reports: 0,
+      owner: user.email, createdAt: Date.now(),
+    });
+    store.set('sa_posts', posts);
+    setDone(true);
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="p-8 space-y-5">
+        {done ? (
+          <div className="text-center space-y-4 py-4">
+            <p className="text-sage-700">✅ 已发布到社区。</p>
+            <Btn variant="ghost" onClick={onClose}>关闭</Btn>
+          </div>
+        ) : (
+          <>
+            <h3 className="font-serif text-lg text-sage-700 text-center">发布到社区</h3>
+            <div>
+              <label className="block text-xs text-sage-600 mb-1.5">帖子标题（可自定义）</label>
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="给这条觉察笔记起个标题……"
+                className="w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300" />
+            </div>
+            <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input type="checkbox" checked={isPublic} onChange={e => setIsPublic(e.target.checked)} className="w-4 h-4 accent-sage-500" />
+              是否公开（公开后所有人可见）
+            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+                <input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} className="w-4 h-4 accent-sage-500" />
+                匿名发布
+              </label>
+              {!anonymous && (
+                <input value={nickname} onChange={e => setNickname(e.target.value)} placeholder="自定义昵称"
+                  className="w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300" />
+              )}
+            </div>
+            <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input type="checkbox" checked={allowComments} onChange={e => setAllowComments(e.target.checked)} className="w-4 h-4 accent-sage-500" />
+              是否允许评论
+            </label>
+            <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input type="checkbox" checked={showMusing} onChange={e => setShowMusing(e.target.checked)} className="w-4 h-4 accent-sage-500" />
+              是否展示随想板块内容
+            </label>
+            {!showMusing && (
+              <p className="text-xs text-soft -mt-2 ml-6">取消勾选后，社区公开帖子不展示随想内容，仅保留在你的个人存档内。</p>
+            )}
+            <div className="flex gap-3 justify-center pt-2">
+              <Btn variant="ghost" onClick={onClose}>取消</Btn>
+              <Btn onClick={publish}>确认发布</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ================= 模块2：我的存档 ================= */
+function ArchivePage({ user }) {
+  const [records, setRecords] = useState(() => store.get('sa_records', []));
+  const [editing, setEditing] = useState(null); // record being edited
+  const [detailId, setDetailId] = useState(null); // 详情弹窗中的记录 id
+
+  const persist = recs => { setRecords(recs); store.set('sa_records', recs); };
+  const update = rec => persist(records.map(r => r.id === rec.id ? rec : r));
+  const remove = id => {
+    if (!confirm('确定删除这条觉察记录吗？')) return;
+    persist(records.filter(r => r.id !== id));
+    setDetailId(null);
+  };
+  const saveEdit = rec => { persist(records.map(r => r.id === rec.id ? { ...rec, updatedAt: Date.now() } : r)); setEditing(null); };
+
+  const detail = records.find(r => r.id === detailId) || null;
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-10">
+      <div className="text-center mb-10">
+        <h1 className="font-serif text-2xl text-sage-700">我的存档</h1>
+        <p className="text-xs text-soft mt-3 leading-relaxed">
+          {user
+            ? '登录用户：数据云端保存，可以跨设备访问，拥有社区发帖权限。'
+            : '游客模式：数据保存在浏览器 LocalStorage，换设备 / 清缓存数据会丢失。登录后可云端同步。'}
+        </p>
+      </div>
+
+      {records.length === 0 ? (
+        <p className="text-center text-soft text-sm py-20">还没有觉察记录。去「觉察练习」写下第一条吧。</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          {records.map(r => (
+            <div key={r.id} onClick={() => setDetailId(r.id)}
+              className="bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm cursor-pointer hover:shadow-md hover:border-sage-200 transition-all flex flex-col">
+              {/* 左上角彩色标签 */}
+              <div className="flex flex-wrap gap-1.5 mb-3 min-h-[20px]">
+                {r.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
+              </div>
+              {/* 事件标题：最醒目 */}
+              <h3 className="font-serif text-lg text-ink leading-snug line-clamp-2">{r.event}</h3>
+              {/* 其余内容：缩小 + 省略号截断 */}
+              <div className="mt-3 space-y-1.5 text-xs text-ink/65 leading-relaxed">
+                {r.emotions && r.emotions.trim() && <p className="line-clamp-1"><span className="text-sage-500">情绪：</span>{r.emotions}</p>}
+                {r.thoughts && r.thoughts.trim() && <p className="line-clamp-2"><span className="text-sage-500">想法：</span>{r.thoughts}</p>}
+                {r.reframe && r.reframe.trim() && <p className="line-clamp-2"><span className="text-sage-500">重构后的想法：</span>{r.reframe}</p>}
+                {r.musing && r.musing.trim() && <p className="line-clamp-1"><span className="text-sage-500">随想：</span>{r.musing}</p>}
+              </div>
+              <p className="mt-auto pt-3 text-[11px] text-soft">{fmtTime(r.createdAt)}{r.updatedAt !== r.createdAt && '（已编辑）'}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {detail && (
+        <ArchiveDetail
+          record={detail}
+          user={user}
+          onUpdate={update}
+          onRemove={() => remove(detail.id)}
+          onEdit={() => setEditing({ ...detail })}
+          onClose={() => setDetailId(null)}
+        />
+      )}
+      {editing && <EditModal record={editing} onChange={setEditing} onSave={() => saveEdit(editing)} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+/* 存档详情弹窗：完整记录 + 随想板块 */
+function ArchiveDetail({ record, user, onUpdate, onRemove, onEdit, onClose }) {
+  const [musingDraft, setMusingDraft] = useState(record.musing || '');
+  const [tagDraft, setTagDraft] = useState('');
+  const [publishOpen, setPublishOpen] = useState(false);
+
+  const saveMusing = () => {
+    onUpdate({ ...record, musing: musingDraft, musingSavedAt: Date.now() });
+  };
+  const addTag = () => {
+    const t = tagDraft.trim();
+    if (!t || record.tags.includes(t)) return;
+    onUpdate({ ...record, tags: [...record.tags, t] });
+    setTagDraft('');
+  };
+  const removeTag = t => onUpdate({ ...record, tags: record.tags.filter(x => x !== t) });
+
+  return (
+    <Modal wide onClose={onClose}>
+      <div className="p-7 md:p-9 space-y-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {record.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
+          </div>
+          <button onClick={onClose} className="text-soft hover:text-ink text-lg leading-none shrink-0">×</button>
+        </div>
+
+        <div>
+          <h2 className="font-serif text-xl text-ink leading-snug">{record.event}</h2>
+          <p className="text-xs text-soft mt-2">{fmtTime(record.createdAt)}{record.updatedAt !== record.createdAt && '（已编辑）'}</p>
+        </div>
+
+        <RecordBody form={record} />
+
+        {/* 标签管理 */}
+        <div className="space-y-2.5 pt-1">
+          <p className="text-xs text-sage-600">自定义标签</p>
+          <div className="flex flex-wrap gap-1.5">
+            {record.tags.map(t => <Tag key={t} onRemove={() => removeTag(t)}>{t}</Tag>)}
+          </div>
+          <div className="flex gap-2">
+            <input value={tagDraft} onChange={e => setTagDraft(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addTag()}
+              placeholder="添加自定义标签，回车确认"
+              className="flex-1 bg-white border border-sage-100 rounded-full px-4 py-1.5 text-xs focus:border-sage-300" />
+            <button onClick={addTag} className="text-xs text-sage-500 hover:text-sage-700 px-2">添加</button>
+          </div>
+        </div>
+
+        {/* 随想板块 */}
+        <div className="bg-sage-50/70 border border-sage-100 rounded-2xl p-5 space-y-3">
+          <div>
+            <p className="text-sm text-sage-700">随想</p>
+            <p className="text-xs text-soft mt-0.5">可在日后翻看时填写，记录你的成长足迹</p>
+          </div>
+          <Textarea value={musingDraft} onChange={setMusingDraft} placeholder="此刻想补充的任何文字……" rows={4} />
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] text-soft">
+              {record.musingSavedAt ? `上次保存：${fmtTime(record.musingSavedAt)}` : '还没有保存过随想'}
+            </p>
+            <Btn onClick={saveMusing} disabled={musingDraft === (record.musing || '')}>保存随想</Btn>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 justify-center pt-2">
+          <Btn variant="ghost" onClick={onEdit}>编辑记录</Btn>
+          {user && <Btn variant="ghost" onClick={() => setPublishOpen(true)}>发布到社区</Btn>}
+          <button onClick={onRemove} className="text-xs text-red-300 hover:text-red-400 px-2">删除记录</button>
+        </div>
+      </div>
+      {publishOpen && <PublishModal form={record} onClose={() => setPublishOpen(false)} />}
+    </Modal>
+  );
+}
+
+function RecordBody({ form }) {
+  const rows = [
+    ['① 事件', form.event],
+    ['② 情绪', form.emotions],
+    ['③ 想法与信念', form.thoughts],
+    ['④ 切换视角的思考', form.reflection],
+    ['⑤ 重构后的想法', form.reframe],
+    ['⑤ 微小行动', form.action],
+  ];
+  return (
+    <div className="space-y-3">
+      {rows.map(([label, val]) => val && val.trim() && (
+        <div key={label}>
+          <p className="text-xs text-sage-500 mb-1">{label}</p>
+          <p className="text-sm text-ink/90 leading-relaxed whitespace-pre-wrap">{val}</p>
+        </div>
+      ))}
+      {form.beliefs && form.beliefs.length > 0 && (
+        <div>
+          <p className="text-xs text-sage-500 mb-1.5">③ 勾选的信念</p>
+          <div className="flex flex-wrap gap-1.5">
+            {form.beliefs.map(k => <Tag key={k}>{k === 'other' && form.otherBelief ? `其他：${form.otherBelief}` : BELIEF_LABELS[k].split('：')[0]}</Tag>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditModal({ record, onChange, onSave, onClose }) {
+  const set = (k, v) => onChange({ ...record, [k]: v });
+  const fields = [
+    ['event', '① 事件'], ['emotions', '② 情绪'], ['thoughts', '③ 想法与信念'],
+    ['reflection', '④ 切换视角的思考'], ['reframe', '⑤ 重构后的想法'], ['action', '⑤ 微小行动'],
+  ];
+  return (
+    <Modal wide onClose={onClose}>
+      <div className="p-8 space-y-4">
+        <h3 className="font-serif text-lg text-sage-700 text-center">编辑觉察记录</h3>
+        {fields.map(([k, label]) => (
+          <div key={k}>
+            <label className="block text-xs text-sage-600 mb-1.5">{label}</label>
+            <Textarea value={record[k]} onChange={v => set(k, v)} rows={3} />
+          </div>
+        ))}
+        <div className="flex gap-3 justify-center pt-2">
+          <Btn variant="ghost" onClick={onClose}>取消</Btn>
+          <Btn onClick={onSave}>保存修改</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ================= 模块3：社区 ================= */
+const postTitle = p => p.title || (p.form.event ? p.form.event.split('\n')[0].slice(0, 30) : '觉察笔记');
+const postTags = p => (p.form.beliefs || []).map(k => k === 'other' && p.form.otherBelief ? `其他：${p.form.otherBelief}` : beliefShort(k));
+
+function CommunityPage({ user }) {
+  const [posts, setPosts] = useState(() => store.get('sa_posts', []));
+  const [query, setQuery] = useState('');
+  const [detailId, setDetailId] = useState(null);
+
+  const persist = ps => { setPosts(ps); store.set('sa_posts', ps); };
+  const updatePost = np => persist(posts.map(x => x.id === np.id ? np : x));
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return posts.filter(p => {
+      if (!p.public) return false;
+      if (!q) return true;
+      const hay = [
+        postTitle(p), p.nickname, p.form.event, p.form.emotions, p.form.thoughts, p.form.reflection,
+        p.form.reframe, p.form.action, p.showMusing !== false ? (p.musing || '') : '',
+        ...(p.form.beliefs || []).map(k => BELIEF_LABELS[k])
+      ].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }, [posts, query]);
+
+  const report = id => {
+    if (!confirm('确定举报这条笔记吗？')) return;
+    persist(posts.map(p => p.id === id ? { ...p, reports: p.reports + 1 } : p));
+    alert('已收到举报，感谢反馈。');
+  };
+
+  const detail = posts.find(p => p.id === detailId) || null;
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-10 space-y-14">
+
+      {/* 开发者有话说 */}
+      <section className="bg-paper border border-sage-100 rounded-2xl p-7 md:p-10 shadow-sm max-w-3xl mx-auto w-full">
+        <h1 className="font-serif text-2xl text-sage-700 text-center">开发者有话说</h1>
+        <div className="mt-6 space-y-4 text-sm leading-7 text-ink/90">
+          <p>欢迎来到这个觉察练习空间。</p>
+          <p>很多时候，困住我们的不是发生的事，而是我们看待它的方式。</p>
+          <p>或许你读过《被讨厌的勇气》？在理解目的论、意识到困住自己的其实是限制性信念之后——就像那只从小被拴住的大象，长大之后绳索早已解开，却依然坚信自己无法逃走——你是否想要进一步练习自我觉察，成为自己想法与信念的主人，活出你想要的自我？</p>
+          <p>这正是这个网站想要做到的事：它不是心理课程，也不是鸡汤文集，而是一套可以反复使用的练习工具。<br />我们的核心逻辑：一件事本身并不会决定你的感受与行动，真正起作用的，是你对这件事的信念与解读。</p>
+          <div>
+            <p className="mb-1">你可以练习两种视角：</p>
+            <ul className="space-y-1">
+              <li>- 向后看（原因视角）：理解感受从何而来；</li>
+              <li>- 向前看（目的视角）：看见自己想要去往哪里，拿回选择行动的主动权。（这也是阿德勒的主张）</li>
+            </ul>
+          </div>
+          <div>
+            <p className="mb-1">网站功能简要说明：</p>
+            <ol className="space-y-1 list-none">
+              <li>1. 觉察练习表单：跟着步骤记录事件、情绪，捕捉隐藏的信念，切换视角思考，写下微小行动。</li>
+              <li>2. 个人存档：游客模式下记录保存在当前浏览器；注册登录后，记录云端保存，跨设备可用。你可以随时编辑、回看过往所有觉察笔记。</li>
+              <li>3. 社区分享：写完觉察记录后，可以选择是否公开、是否匿名发布。在这里大家交流练习心得、觉察复盘，互相启发。</li>
+            </ol>
+          </div>
+          <div className="bg-sage-50 border border-sage-100 rounded-xl p-4">
+            <p className="text-sage-700 mb-1">⚠️ 重要提醒再次说明：</p>
+            <p>本站仅用于自我觉察思维练习，不是心理咨询，不能替代专业心理帮助。</p>
+            <p>如果你长期深陷痛苦、存在自伤想法，请寻求学校心理老师或正规心理咨询师的帮助。未成年人建议在信任成年人陪伴下使用。</p>
+          </div>
+          <p>希望在这里，你能慢慢看见那些困住你的信念，一点点选择你想要的行动。</p>
+        </div>
+      </section>
+
+      {/* 开发者示例觉察笔记（预留） */}
+      <section className="max-w-3xl mx-auto w-full">
+        <h2 className="font-serif text-xl text-sage-700 mb-4">开发者示例觉察笔记</h2>
+        <div className="border border-dashed border-sage-200 rounded-2xl p-10 text-center text-soft text-sm bg-paper/60">
+          示例笔记即将填入，敬请期待。
+        </div>
+      </section>
+
+      {/* 搜索：按标题、正文检索 */}
+      <section className="max-w-3xl mx-auto w-full">
+        <input value={query} onChange={e => setQuery(e.target.value)}
+          placeholder="搜索帖子标题或正文关键词……"
+          className="w-full bg-paper border border-sage-100 rounded-full px-5 py-3 text-sm focus:border-sage-300 shadow-sm" />
+      </section>
+
+      {/* 笔记卡片流：小红书式排版，摘要预览 */}
+      <section>
+        {filtered.length === 0 ? (
+          <p className="text-center text-soft text-sm py-14">
+            {query ? '没有找到匹配的公开笔记。' : '社区还没有公开笔记。完成一次觉察练习后，可以把你的复盘发布到这里。'}
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {filtered.map(p => (
+              <article key={p.id} onClick={() => setDetailId(p.id)}
+                className="bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm cursor-pointer hover:shadow-md hover:border-sage-200 transition-all">
+                {/* 左上角彩色标签 */}
+                <div className="flex flex-wrap gap-1.5 mb-2.5 min-h-[20px]">
+                  {postTags(p).slice(0, 3).map(t => <ColorTag key={t}>{t}</ColorTag>)}
+                </div>
+                {/* 标题 */}
+                <h3 className="font-serif text-base text-ink leading-snug line-clamp-2">{postTitle(p)}</h3>
+                {/* 摘要：只展示 事件 / 想法 / 重构后的想法 */}
+                <div className="mt-2.5 space-y-1.5 text-xs text-ink/65 leading-relaxed">
+                  {p.form.event && p.form.event.trim() && <p className="line-clamp-2"><span className="text-sage-500">事件：</span>{p.form.event}</p>}
+                  {p.form.thoughts && p.form.thoughts.trim() && <p className="line-clamp-3"><span className="text-sage-500">想法：</span>{p.form.thoughts}</p>}
+                  {p.form.reframe && p.form.reframe.trim() && <p className="line-clamp-3"><span className="text-sage-500">重构后的想法：</span>{p.form.reframe}</p>}
+                </div>
+                <div className="mt-4 pt-3 border-t border-sage-50 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded-full bg-sage-100 flex items-center justify-center text-sage-500 text-[10px] font-serif shrink-0">
+                      {p.nickname[0] || '匿'}
+                    </div>
+                    <span className="text-xs text-ink/80 truncate">{p.nickname}</span>
+                    <span className="text-[11px] text-soft whitespace-nowrap">{fmtTime(p.createdAt)}</span>
+                  </div>
+                  <span className="text-[11px] text-soft whitespace-nowrap">
+                    {p.allowComments ? `评论 ${p.comments.length}` : '评论已关闭'}
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {detail && (
+        <PostDetail post={detail} user={user} onUpdate={updatePost} onReport={() => report(detail.id)} onClose={() => setDetailId(null)} />
+      )}
+    </div>
+  );
+}
+
+/* 帖子详情：完整全部内容 + 评论区 */
+function PostDetail({ post, user, onUpdate, onReport, onClose }) {
+  const isOwner = user && user.email === post.owner;
+  return (
+    <Modal wide onClose={onClose}>
+      <div className="p-7 md:p-9 space-y-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {postTags(post).map(t => <ColorTag key={t}>{t}</ColorTag>)}
+          </div>
+          <button onClick={onClose} className="text-soft hover:text-ink text-lg leading-none shrink-0">×</button>
+        </div>
+
+        <div>
+          <h2 className="font-serif text-xl text-ink leading-snug">{postTitle(post)}</h2>
+          <div className="flex items-center gap-2 mt-2.5">
+            <div className="w-6 h-6 rounded-full bg-sage-100 flex items-center justify-center text-sage-500 text-[10px] font-serif">
+              {post.nickname[0] || '匿'}
+            </div>
+            <span className="text-xs text-ink/80">{post.nickname}</span>
+            <span className="text-[11px] text-soft">{fmtTime(post.createdAt)}</span>
+            <button onClick={onReport} className="text-[11px] text-soft hover:text-red-400 ml-auto">举报</button>
+          </div>
+        </div>
+
+        <RecordBody form={post.form} />
+
+        {/* 随想板块：发布时勾选展示才渲染 */}
+        {post.showMusing !== false && post.musing && post.musing.trim() && (
+          <div className="bg-sage-50/70 border border-sage-100 rounded-2xl p-5">
+            <p className="text-sm text-sage-700 mb-2">随想</p>
+            <p className="text-sm text-ink/85 leading-relaxed whitespace-pre-wrap">{post.musing}</p>
+          </div>
+        )}
+
+        {/* 评论区 */}
+        <div className="pt-2 border-t border-sage-50">
+          {post.allowComments ? (
+            <CommentSection post={post} user={user} isOwner={isOwner} onUpdate={onUpdate} />
+          ) : (
+            <p className="text-xs text-soft">作者已关闭评论</p>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CommentSection({ post, user, isOwner, onUpdate }) {
+  const [text, setText] = useState('');
+  const submit = () => {
+    const t = text.trim();
+    if (!t) return;
+    const nickname = user ? user.nickname : '匿名访客';
+    const isPostOwner = user && user.email === post.owner;
+    onUpdate({ ...post, comments: [...post.comments, { id: uid(), nickname, text: t, isOwner: !!isPostOwner, createdAt: Date.now() }] });
+    setText('');
+  };
+  const togglePin = cid => onUpdate({ ...post, pinnedCommentId: post.pinnedCommentId === cid ? null : cid });
+
+  const sorted = [...post.comments].sort((a, b) => {
+    const ap = a.id === post.pinnedCommentId ? 0 : 1;
+    const bp = b.id === post.pinnedCommentId ? 0 : 1;
+    return ap - bp || a.createdAt - b.createdAt;
+  });
+
+  return (
+    <div className="mt-3 space-y-3">
+      <p className="text-xs text-sage-600">评论（{post.comments.length}）</p>
+      {sorted.map(c => {
+        const pinned = c.id === post.pinnedCommentId;
+        return (
+          <div key={c.id} className={`rounded-xl px-4 py-2.5 ${pinned ? 'bg-sage-50 border border-sage-200' : 'bg-sage-50/60'}`}>
+            <p className="text-xs text-sage-600 flex items-center gap-1.5 flex-wrap">
+              {c.nickname}
+              {c.isOwner && <span className="text-[10px] px-1.5 py-px rounded bg-sage-200 text-sage-700">帖主</span>}
+              {pinned && <span className="text-[10px] px-1.5 py-px rounded bg-sage-500 text-white">置顶</span>}
+              <span className="text-soft">· {fmtTime(c.createdAt)}</span>
+              {isOwner && (
+                <button onClick={() => togglePin(c.id)} className="ml-auto text-[11px] text-sage-400 hover:text-sage-600">
+                  {pinned ? '取消置顶' : '置顶'}
+                </button>
+              )}
+            </p>
+            <p className="text-sm text-ink/90 mt-0.5 leading-relaxed">{c.text}</p>
+          </div>
+        );
+      })}
+      <div className="flex gap-2">
+        <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
+          placeholder="写下你的评论……"
+          className="flex-1 bg-white border border-sage-100 rounded-full px-4 py-2 text-sm focus:border-sage-300" />
+        <button onClick={submit} className="text-sm text-sage-500 hover:text-sage-700 px-2">发送</button>
+      </div>
+    </div>
+  );
+}
+
+/* ================= 应用入口 ================= */
+function App() {
+  const [agreed, setAgreed] = useState(() => store.get('sa_agreed', false));
+  const [page, setPage] = useState('practice');
+  const [user, setUser] = useState(() => store.get('sa_user', null));
+  const [loginOpen, setLoginOpen] = useState(false);
+
+  const enter = () => { store.set('sa_agreed', true); setAgreed(true); setPage('practice'); };
+  const logout = () => { store.set('sa_user', null); setUser(null); };
+
+  return (
+    <div className="font-sans min-h-screen">
+      {!agreed && <WelcomeModal onEnter={enter} />}
+      <Nav page={page} setPage={setPage} user={user} onLoginClick={() => setLoginOpen(true)} onLogout={logout} />
+      <main className="pt-16 pb-16">
+        {page === 'practice' && <PracticePage goArchive={() => setPage('archive')} />}
+        {page === 'archive' && <ArchivePage user={user} />}
+        {page === 'community' && <CommunityPage user={user} />}
+      </main>
+      <footer className="text-center pb-8 text-xs text-soft/70 leading-relaxed px-4">
+        觉察练习空间 · 本站仅为自我觉察练习工具，不能替代专业心理帮助
+      </footer>
+      {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onLogin={u => { setUser(u); setLoginOpen(false); }} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);

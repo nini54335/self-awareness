@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>觉察练习空间</title>
+<script src="./vendor/tailwind.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          mist: '#f7f6f2',
+          paper: '#fdfdfb',
+          sage: {
+            50: '#f3f6f3', 100: '#e4ebe4', 200: '#c9d6c9', 300: '#a8bda8',
+            400: '#86a386', 500: '#6b8a6b', 600: '#557055', 700: '#455a45'
+          },
+          ink: '#4a4f4a',
+          soft: '#8a9089'
+        },
+        fontFamily: {
+          serif: ['"Noto Serif SC"', 'Georgia', 'serif'],
+          sans: ['"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif']
+        }
+      }
+    }
+  }
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html { scroll-behavior: smooth; }
+  body { background: #f7f6f2; color: #4a4f4a; }
+  textarea:focus, input:focus { outline: none; }
+</style>
+<script src="./vendor/react.min.js"></script>
+<script src="./vendor/react-dom.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>
