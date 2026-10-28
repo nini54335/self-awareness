@@ -24,14 +24,10 @@ const BRANCH_TIPS = {
 const BELIEF_LABELS = Object.fromEntries(BELIEF_OPTIONS.map(o => [o.key, o.label]));
 const beliefShort = k => BELIEF_LABELS[k] ? BELIEF_LABELS[k].split('：')[0] : k;
 
-/* 彩色标签色板：按文字 hash 取色，同一标签颜色固定 */
+/* 彩色标签配色：按文字 hash 固定颜色 */
 const TAG_COLORS = [
-  { bg: '#e4ede2', text: '#557055' },
-  { bg: '#f3eadd', text: '#8a6b47' },
-  { bg: '#e2ebf2', text: '#4d6a85' },
-  { bg: '#f2e4ec', text: '#8a5470' },
-  { bg: '#eeeddf', text: '#767051' },
-  { bg: '#e7e4f1', text: '#615889' },
+  'bg-[#e2ebe2] text-[#557055]', 'bg-[#e7e4f1] text-[#6a6390]', 'bg-[#f2e8e4] text-[#9a6f5f]',
+  'bg-[#e2ebf2] text-[#5f7d9a]', 'bg-[#f2f0e2] text-[#8a8555]', 'bg-[#f2e2ec] text-[#9a5f83]',
 ];
 const tagColor = t => {
   let h = 0;
@@ -92,11 +88,10 @@ function Tag({ children, onRemove }) {
   );
 }
 
-/* 卡片左上角彩色标签色块 */
+/* 彩色标签 */
 function ColorTag({ children }) {
-  const c = tagColor(String(children));
   return (
-    <span className="inline-block text-[11px] leading-5 px-2 rounded-md" style={{ background: c.bg, color: c.text }}>
+    <span className={`inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full ${tagColor(children)}`}>
       {children}
     </span>
   );
@@ -224,6 +219,7 @@ function PracticePage({ onSaved, goArchive }) {
   const [form, setForm] = useState({ ...emptyForm });
   const [showFactTip, setShowFactTip] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [savedId, setSavedId] = useState(null); // 本次保存的存档 id，用于发布标记
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const toggleBelief = key => setForm(f => ({
@@ -245,7 +241,15 @@ function PracticePage({ onSaved, goArchive }) {
     const rec = { ...form, id: uid(), tags: [], musing: '', musingSavedAt: null, createdAt: Date.now(), updatedAt: Date.now() };
     records.unshift(rec);
     store.set('sa_records', records);
+    setSavedId(rec.id);
     setStage('done');
+  };
+
+  /* 发布后把对应存档标记为「已发布社区」，防止重复发布 */
+  const markPublished = pid => {
+    if (!savedId) return;
+    const recs = store.get('sa_records', []).map(r => r.id === savedId ? { ...r, postId: pid, publishedAt: Date.now() } : r);
+    store.set('sa_records', recs);
   };
 
   const restart = () => { setForm({ ...emptyForm }); setStage('intro'); };
@@ -285,12 +289,12 @@ function PracticePage({ onSaved, goArchive }) {
             <Btn variant="ghost" onClick={restart}>新建一次觉察练习</Btn>
           </div>
         </div>
-        {publishOpen && <PublishModal form={form} onClose={() => setPublishOpen(false)} />}
+        {publishOpen && <PublishModal form={form} onClose={() => setPublishOpen(false)} onPublished={markPublished} />}
       </div>
     );
   }
 
-  /* ---- 分步表单 ---- */
+  /* ---- 分步表单：纵向追加 + 步骤导航 ---- */
   return (
     <div className="max-w-xl mx-auto px-4 py-10">
       {/* 步骤导航：已到达的步骤可点击跳转，内容保留可直接编辑 */}
@@ -445,7 +449,11 @@ function StepFooter({ children }) {
 }
 
 /* ================= 发布到社区弹窗 ================= */
-function PublishModal({ form, onClose }) {
+const SECTION_FIELDS = [
+  ['event', '① 事件'], ['emotions', '② 情绪'], ['thoughts', '③ 想法与信念'],
+  ['reflection', '④ 切换视角的思考'], ['reframe', '⑤ 重构后的想法'], ['action', '⑤ 微小行动'],
+];
+function PublishModal({ form, onClose, onPublished }) {
   const user = store.get('sa_user', null);
   const [isPublic, setIsPublic] = useState(true);
   const [anonymous, setAnonymous] = useState(true);
@@ -453,6 +461,7 @@ function PublishModal({ form, onClose }) {
   const [allowComments, setAllowComments] = useState(true);
   const [showMusing, setShowMusing] = useState(true);
   const [title, setTitle] = useState(form.event ? form.event.split('\n')[0].slice(0, 30) : '');
+  const [sections, setSections] = useState({ event: true, emotions: true, thoughts: true, reflection: true, reframe: true, action: true });
   const [done, setDone] = useState(false);
 
   if (!user) {
@@ -468,15 +477,17 @@ function PublishModal({ form, onClose }) {
 
   const publish = () => {
     const posts = store.get('sa_posts', []);
+    const postId = uid();
     posts.unshift({
-      id: uid(), form: { ...form }, public: isPublic,
+      id: postId, form: { ...form }, public: isPublic,
       title: title.trim() || (form.event ? form.event.split('\n')[0].slice(0, 30) : '觉察笔记'),
-      musing: form.musing || '', showMusing,
+      musing: form.musing || '', showMusing, visibleSections: sections,
       nickname: anonymous ? '匿名' : (nickname.trim() || user.nickname),
       anonymous, allowComments, comments: [], pinnedCommentId: null, reports: 0,
       owner: user.email, createdAt: Date.now(),
     });
     store.set('sa_posts', posts);
+    if (onPublished) onPublished(postId);
     setDone(true);
   };
 
@@ -495,6 +506,19 @@ function PublishModal({ form, onClose }) {
               <label className="block text-xs text-sage-600 mb-1.5">帖子标题（可自定义）</label>
               <input value={title} onChange={e => setTitle(e.target.value)} placeholder="给这条觉察笔记起个标题……"
                 className="w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-sage-600">勾选需要对外公开展示的内容</p>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                {SECTION_FIELDS.map(([k, label]) => (
+                  <label key={k} className="flex items-center gap-2 text-xs cursor-pointer text-ink/80">
+                    <input type="checkbox" checked={sections[k]}
+                      onChange={e => setSections(s => ({ ...s, [k]: e.target.checked }))}
+                      className="w-3.5 h-3.5 accent-sage-500" />
+                    {label}
+                  </label>
+                ))}
+              </div>
             </div>
             <label className="flex items-center gap-2.5 text-sm cursor-pointer">
               <input type="checkbox" checked={isPublic} onChange={e => setIsPublic(e.target.checked)} className="w-4 h-4 accent-sage-500" />
@@ -521,6 +545,9 @@ function PublishModal({ form, onClose }) {
             {!showMusing && (
               <p className="text-xs text-soft -mt-2 ml-6">取消勾选后，社区公开帖子不展示随想内容，仅保留在你的个人存档内。</p>
             )}
+            <p className="text-[11px] text-soft leading-relaxed bg-sage-50 border border-sage-100 rounded-xl p-3">
+              本内容属于个人自我觉察记录，本站仅为自助练习工具，不能替代专业心理咨询。
+            </p>
             <div className="flex gap-3 justify-center pt-2">
               <Btn variant="ghost" onClick={onClose}>取消</Btn>
               <Btn onClick={publish}>确认发布</Btn>
@@ -537,21 +564,34 @@ function ArchivePage({ user }) {
   const [records, setRecords] = useState(() => store.get('sa_records', []));
   const [editing, setEditing] = useState(null); // record being edited
   const [detailId, setDetailId] = useState(null); // 详情弹窗中的记录 id
+  const [confirmId, setConfirmId] = useState(null); // 待二次确认删除的记录 id
+  const [view, setView] = useState('list'); // list | tree
+  const [activeTag, setActiveTag] = useState(null); // null = 全部存档
 
   const persist = recs => { setRecords(recs); store.set('sa_records', recs); };
   const update = rec => persist(records.map(r => r.id === rec.id ? rec : r));
-  const remove = id => {
-    if (!confirm('确定删除这条觉察记录吗？')) return;
-    persist(records.filter(r => r.id !== id));
+  const remove = id => setConfirmId(id);
+  const doRemove = () => {
+    persist(records.filter(r => r.id !== confirmId));
     setDetailId(null);
+    setConfirmId(null);
   };
   const saveEdit = rec => { persist(records.map(r => r.id === rec.id ? { ...rec, updatedAt: Date.now() } : r)); setEditing(null); };
 
+  /* 默认按创建时间倒序，最新在前 */
+  const sorted = useMemo(() => [...records].sort((a, b) => b.createdAt - a.createdAt), [records]);
+  /* 从所有存档收集标签，生成筛选栏 */
+  const allTags = useMemo(() => [...new Set(records.flatMap(r => r.tags))], [records]);
+  const filtered = useMemo(() => activeTag ? sorted.filter(r => r.tags.includes(activeTag)) : sorted, [sorted, activeTag]);
+
   const detail = records.find(r => r.id === detailId) || null;
+
+  const chipCls = on => `px-3 py-1.5 rounded-full text-xs border transition-colors ${
+    on ? 'bg-sage-100 text-sage-700 border-sage-300' : 'bg-white text-sage-600 border-sage-200 hover:bg-sage-50'}`;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
-      <div className="text-center mb-10">
+      <div className="text-center mb-8">
         <h1 className="font-serif text-2xl text-sage-700">我的存档</h1>
         <p className="text-xs text-soft mt-3 leading-relaxed">
           {user
@@ -563,27 +603,50 @@ function ArchivePage({ user }) {
       {records.length === 0 ? (
         <p className="text-center text-soft text-sm py-20">还没有觉察记录。去「觉察练习」写下第一条吧。</p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-          {records.map(r => (
-            <div key={r.id} onClick={() => setDetailId(r.id)}
-              className="bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm cursor-pointer hover:shadow-md hover:border-sage-200 transition-all flex flex-col">
-              {/* 左上角彩色标签 */}
-              <div className="flex flex-wrap gap-1.5 mb-3 min-h-[20px]">
-                {r.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
-              </div>
-              {/* 事件标题：最醒目 */}
-              <h3 className="font-serif text-lg text-ink leading-snug line-clamp-2">{r.event}</h3>
-              {/* 其余内容：缩小 + 省略号截断 */}
-              <div className="mt-3 space-y-1.5 text-xs text-ink/65 leading-relaxed">
-                {r.emotions && r.emotions.trim() && <p className="line-clamp-1"><span className="text-sage-500">情绪：</span>{r.emotions}</p>}
-                {r.thoughts && r.thoughts.trim() && <p className="line-clamp-2"><span className="text-sage-500">想法：</span>{r.thoughts}</p>}
-                {r.reframe && r.reframe.trim() && <p className="line-clamp-2"><span className="text-sage-500">重构后的想法：</span>{r.reframe}</p>}
-                {r.musing && r.musing.trim() && <p className="line-clamp-1"><span className="text-sage-500">随想：</span>{r.musing}</p>}
-              </div>
-              <p className="mt-auto pt-3 text-[11px] text-soft">{fmtTime(r.createdAt)}{r.updatedAt !== r.createdAt && '（已编辑）'}</p>
+        <>
+          {/* 标签筛选栏 + 视图切换 */}
+          <div className="flex flex-wrap items-center gap-2 mb-6">
+            <button onClick={() => setActiveTag(null)} className={chipCls(!activeTag)}>全部存档</button>
+            {allTags.map(t => (
+              <button key={t} onClick={() => setActiveTag(activeTag === t ? null : t)} className={chipCls(activeTag === t)}>{t}</button>
+            ))}
+            <span className="ml-auto flex gap-1.5">
+              <button onClick={() => setView('list')} className={chipCls(view === 'list')}>列表</button>
+              <button onClick={() => setView('tree')} className={chipCls(view === 'tree')}>成长树</button>
+            </span>
+          </div>
+
+          {view === 'tree' ? (
+            <GrowthTree records={filtered} onOpen={id => setDetailId(id)} />
+          ) : filtered.length === 0 ? (
+            <p className="text-center text-soft text-sm py-14">该标签下还没有存档。</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {filtered.map(r => (
+                <div key={r.id} onClick={() => setDetailId(r.id)}
+                  className="bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm cursor-pointer hover:shadow-md hover:border-sage-200 transition-all flex flex-col">
+                  {/* 左上角彩色标签 */}
+                  <div className="flex flex-wrap gap-1.5 mb-3 min-h-[20px]">
+                    {r.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
+                  </div>
+                  {/* 事件标题：最醒目 */}
+                  <h3 className="font-serif text-lg text-ink leading-snug line-clamp-2">{r.event}</h3>
+                  {/* 其余内容：缩小 + 省略号截断 */}
+                  <div className="mt-3 space-y-1.5 text-xs text-ink/65 leading-relaxed">
+                    {r.emotions && r.emotions.trim() && <p className="line-clamp-1"><span className="text-sage-500">情绪：</span>{r.emotions}</p>}
+                    {r.thoughts && r.thoughts.trim() && <p className="line-clamp-2"><span className="text-sage-500">想法：</span>{r.thoughts}</p>}
+                    {r.reframe && r.reframe.trim() && <p className="line-clamp-2"><span className="text-sage-500">重构后的想法：</span>{r.reframe}</p>}
+                    {r.musing && r.musing.trim() && <p className="line-clamp-1"><span className="text-sage-500">随想：</span>{r.musing}</p>}
+                  </div>
+                  <p className="mt-auto pt-3 text-[11px] text-soft flex items-center gap-2 flex-wrap">
+                    {fmtTime(r.createdAt)}{r.updatedAt !== r.createdAt && '（已编辑）'}
+                    {r.postId && <span className="text-[10px] px-1.5 py-px rounded-full bg-sage-100 text-sage-600">已发布社区</span>}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {detail && (
@@ -597,11 +660,105 @@ function ArchivePage({ user }) {
         />
       )}
       {editing && <EditModal record={editing} onChange={setEditing} onSave={() => saveEdit(editing)} onClose={() => setEditing(null)} />}
+      {confirmId && (
+        <ConfirmModal text="确定删除这条觉察记录吗？删除后无法恢复。"
+          onCancel={() => setConfirmId(null)} onConfirm={doRemove} />
+      )}
     </div>
   );
 }
 
-/* 存档详情弹窗：完整记录 + 随想板块 */
+/* 二次确认弹窗 */
+function ConfirmModal({ text, onCancel, onConfirm }) {
+  return (
+    <Modal onClose={onCancel}>
+      <div className="p-8 text-center space-y-5">
+        <p className="text-sm text-ink leading-relaxed">{text}</p>
+        <div className="flex gap-3 justify-center">
+          <Btn variant="ghost" onClick={onCancel}>取消</Btn>
+          <Btn onClick={onConfirm}>确认删除</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* 成长树视图：时间线 + 标签分类，可折叠，附简单统计（仅可视化展示，不做心理诊断） */
+function GrowthTree({ records, onOpen }) {
+  const [collapsed, setCollapsed] = useState({});
+
+  /* 按标签分组，组内保持时间倒序 */
+  const groups = useMemo(() => {
+    const map = new Map();
+    records.forEach(r => {
+      const keys = r.tags.length ? r.tags : ['未标记'];
+      keys.forEach(t => {
+        if (!map.has(t)) map.set(t, []);
+        map.get(t).push(r);
+      });
+    });
+    return [...map.entries()];
+  }, [records]);
+
+  /* 标签分布统计 */
+  const tagStats = useMemo(() => {
+    const m = new Map();
+    records.forEach(r => r.tags.forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [records]);
+
+  return (
+    <div className="space-y-8">
+      {/* 简单统计 */}
+      <div className="bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm space-y-3">
+        <p className="text-sm text-sage-700">累计觉察 <span className="font-serif text-lg">{records.length}</span> 次</p>
+        {tagStats.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {tagStats.map(([t, n]) => (
+              <span key={t} className="inline-flex items-center gap-1">
+                <ColorTag>{t}</ColorTag>
+                <span className="text-[11px] text-soft">×{n}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 标签分组时间线 */}
+      {groups.map(([tag, recs]) => {
+        const isCollapsed = !!collapsed[tag];
+        return (
+          <div key={tag}>
+            <button onClick={() => setCollapsed(c => ({ ...c, [tag]: !isCollapsed }))}
+              className="flex items-center gap-2 mb-3 w-full text-left">
+              <span className={`text-sage-400 text-xs transition-transform ${isCollapsed ? '' : 'rotate-90'}`}>▶</span>
+              <ColorTag>{tag}</ColorTag>
+              <span className="text-xs text-soft">{recs.length} 条记录</span>
+            </button>
+            {!isCollapsed && (
+              <div className="ml-2 border-l-2 border-sage-100 pl-4 space-y-3">
+                {recs.map(r => (
+                  <button key={r.id} onClick={() => onOpen(r.id)}
+                    className="block w-full text-left bg-paper border border-sage-100 rounded-xl px-4 py-3 hover:border-sage-200 hover:shadow-sm transition-all">
+                    <p className="text-[11px] text-soft">{fmtTime(r.createdAt)}</p>
+                    <p className="font-serif text-sm text-ink leading-snug mt-0.5 line-clamp-1">{r.event ? r.event.split('\n')[0] : '觉察记录'}</p>
+                    {r.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {r.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* 存档详情弹窗：完整记录 + 随想板块 + 发布入口 */
 function ArchiveDetail({ record, user, onUpdate, onRemove, onEdit, onClose }) {
   const [musingDraft, setMusingDraft] = useState(record.musing || '');
   const [tagDraft, setTagDraft] = useState('');
@@ -625,12 +782,27 @@ function ArchiveDetail({ record, user, onUpdate, onRemove, onEdit, onClose }) {
           <div className="flex flex-wrap gap-1.5">
             {record.tags.map(t => <ColorTag key={t}>{t}</ColorTag>)}
           </div>
-          <button onClick={onClose} className="text-soft hover:text-ink text-lg leading-none shrink-0">×</button>
+          {/* 右上角：发布到社区入口 + 关闭 */}
+          <div className="flex items-center gap-2 shrink-0">
+            {user && !record.postId && (
+              <button onClick={() => setPublishOpen(true)}
+                className="text-xs px-3 py-1.5 rounded-full bg-sage-100 text-sage-700 hover:bg-sage-200 transition-colors">
+                发布到社区
+              </button>
+            )}
+            {record.postId && (
+              <span className="text-[10px] px-2 py-1 rounded-full bg-sage-100 text-sage-600">已发布到社区</span>
+            )}
+            <button onClick={onClose} className="text-soft hover:text-ink text-lg leading-none">×</button>
+          </div>
         </div>
 
         <div>
           <h2 className="font-serif text-xl text-ink leading-snug">{record.event}</h2>
-          <p className="text-xs text-soft mt-2">{fmtTime(record.createdAt)}{record.updatedAt !== record.createdAt && '（已编辑）'}</p>
+          <p className="text-xs text-soft mt-2 flex items-center gap-2 flex-wrap">
+            {fmtTime(record.createdAt)}{record.updatedAt !== record.createdAt && '（已编辑）'}
+            {record.postId && <span className="text-[10px] px-1.5 py-px rounded-full bg-sage-100 text-sage-600">已发布社区</span>}
+          </p>
         </div>
 
         <RecordBody form={record} />
@@ -667,33 +839,34 @@ function ArchiveDetail({ record, user, onUpdate, onRemove, onEdit, onClose }) {
 
         <div className="flex flex-wrap gap-3 justify-center pt-2">
           <Btn variant="ghost" onClick={onEdit}>编辑记录</Btn>
-          {user && <Btn variant="ghost" onClick={() => setPublishOpen(true)}>发布到社区</Btn>}
           <button onClick={onRemove} className="text-xs text-red-300 hover:text-red-400 px-2">删除记录</button>
         </div>
       </div>
-      {publishOpen && <PublishModal form={record} onClose={() => setPublishOpen(false)} />}
+      {publishOpen && <PublishModal form={record} onClose={() => setPublishOpen(false)}
+        onPublished={pid => onUpdate({ ...record, postId: pid, publishedAt: Date.now() })} />}
     </Modal>
   );
 }
 
-function RecordBody({ form }) {
+function RecordBody({ form, visible }) {
+  const show = k => !visible || visible[k] !== false;
   const rows = [
-    ['① 事件', form.event],
-    ['② 情绪', form.emotions],
-    ['③ 想法与信念', form.thoughts],
-    ['④ 切换视角的思考', form.reflection],
-    ['⑤ 重构后的想法', form.reframe],
-    ['⑤ 微小行动', form.action],
+    ['① 事件', form.event, 'event'],
+    ['② 情绪', form.emotions, 'emotions'],
+    ['③ 想法与信念', form.thoughts, 'thoughts'],
+    ['④ 切换视角的思考', form.reflection, 'reflection'],
+    ['⑤ 重构后的想法', form.reframe, 'reframe'],
+    ['⑤ 微小行动', form.action, 'action'],
   ];
   return (
     <div className="space-y-3">
-      {rows.map(([label, val]) => val && val.trim() && (
+      {rows.map(([label, val, k]) => show(k) && val && val.trim() && (
         <div key={label}>
           <p className="text-xs text-sage-500 mb-1">{label}</p>
           <p className="text-sm text-ink/90 leading-relaxed whitespace-pre-wrap">{val}</p>
         </div>
       ))}
-      {form.beliefs && form.beliefs.length > 0 && (
+      {show('thoughts') && form.beliefs && form.beliefs.length > 0 && (
         <div>
           <p className="text-xs text-sage-500 mb-1.5">③ 勾选的信念</p>
           <div className="flex flex-wrap gap-1.5">
@@ -705,7 +878,7 @@ function RecordBody({ form }) {
   );
 }
 
-function EditModal({ record, onChange, onSave, onClose }) {
+function EditModal({ record, onChange, onSave, onClose, title, onTitleChange }) {
   const set = (k, v) => onChange({ ...record, [k]: v });
   const fields = [
     ['event', '① 事件'], ['emotions', '② 情绪'], ['thoughts', '③ 想法与信念'],
@@ -714,7 +887,14 @@ function EditModal({ record, onChange, onSave, onClose }) {
   return (
     <Modal wide onClose={onClose}>
       <div className="p-8 space-y-4">
-        <h3 className="font-serif text-lg text-sage-700 text-center">编辑觉察记录</h3>
+        <h3 className="font-serif text-lg text-sage-700 text-center">编辑</h3>
+        {onTitleChange && (
+          <div>
+            <label className="block text-xs text-sage-600 mb-1.5">帖子标题</label>
+            <input value={title} onChange={e => onTitleChange(e.target.value)}
+              className="w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300" />
+          </div>
+        )}
         {fields.map(([k, label]) => (
           <div key={k}>
             <label className="block text-xs text-sage-600 mb-1.5">{label}</label>
@@ -738,10 +918,24 @@ function CommunityPage({ user }) {
   const [posts, setPosts] = useState(() => store.get('sa_posts', []));
   const [query, setQuery] = useState('');
   const [detailId, setDetailId] = useState(null);
+  const [editingPost, setEditingPost] = useState(null); // { id, title, form }
+  const [confirmId, setConfirmId] = useState(null); // 待二次确认删除的帖子 id
 
   const persist = ps => { setPosts(ps); store.set('sa_posts', ps); };
   const updatePost = np => persist(posts.map(x => x.id === np.id ? np : x));
+  const removePost = () => {
+    persist(posts.filter(p => p.id !== confirmId));
+    setDetailId(null);
+    setConfirmId(null);
+  };
+  const savePostEdit = () => {
+    persist(posts.map(p => p.id === editingPost.id
+      ? { ...p, title: editingPost.title.trim() || p.title, form: { ...editingPost.form } }
+      : p));
+    setEditingPost(null);
+  };
 
+  /* 按发布时间倒序，最新发布在前 */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return posts.filter(p => {
@@ -753,7 +947,7 @@ function CommunityPage({ user }) {
         ...(p.form.beliefs || []).map(k => BELIEF_LABELS[k])
       ].join(' ').toLowerCase();
       return hay.includes(q);
-    });
+    }).sort((a, b) => b.createdAt - a.createdAt);
   }, [posts, query]);
 
   const report = id => {
@@ -856,14 +1050,26 @@ function CommunityPage({ user }) {
       </section>
 
       {detail && (
-        <PostDetail post={detail} user={user} onUpdate={updatePost} onReport={() => report(detail.id)} onClose={() => setDetailId(null)} />
+        <PostDetail post={detail} user={user} onUpdate={updatePost} onReport={() => report(detail.id)} onClose={() => setDetailId(null)}
+          onEdit={() => setEditingPost({ id: detail.id, title: postTitle(detail), form: { ...detail.form } })}
+          onDelete={() => setConfirmId(detail.id)} />
+      )}
+      {editingPost && (
+        <EditModal record={editingPost.form} title={editingPost.title}
+          onTitleChange={t => setEditingPost({ ...editingPost, title: t })}
+          onChange={f => setEditingPost({ ...editingPost, form: f })}
+          onSave={savePostEdit} onClose={() => setEditingPost(null)} />
+      )}
+      {confirmId && (
+        <ConfirmModal text="确定删除这条社区帖子吗？删除后无法恢复。"
+          onCancel={() => setConfirmId(null)} onConfirm={removePost} />
       )}
     </div>
   );
 }
 
 /* 帖子详情：完整全部内容 + 评论区 */
-function PostDetail({ post, user, onUpdate, onReport, onClose }) {
+function PostDetail({ post, user, onUpdate, onReport, onClose, onEdit, onDelete }) {
   const isOwner = user && user.email === post.owner;
   return (
     <Modal wide onClose={onClose}>
@@ -883,11 +1089,15 @@ function PostDetail({ post, user, onUpdate, onReport, onClose }) {
             </div>
             <span className="text-xs text-ink/80">{post.nickname}</span>
             <span className="text-[11px] text-soft">{fmtTime(post.createdAt)}</span>
-            <button onClick={onReport} className="text-[11px] text-soft hover:text-red-400 ml-auto">举报</button>
+            <span className="ml-auto flex items-center gap-3">
+              {isOwner && <button onClick={onEdit} className="text-[11px] text-sage-500 hover:text-sage-700">编辑</button>}
+              {isOwner && <button onClick={onDelete} className="text-[11px] text-red-300 hover:text-red-400">删除</button>}
+              <button onClick={onReport} className="text-[11px] text-soft hover:text-red-400">举报</button>
+            </span>
           </div>
         </div>
 
-        <RecordBody form={post.form} />
+        <RecordBody form={post.form} visible={post.visibleSections} />
 
         {/* 随想板块：发布时勾选展示才渲染 */}
         {post.showMusing !== false && post.musing && post.musing.trim() && (

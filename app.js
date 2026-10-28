@@ -36,26 +36,8 @@ const BRANCH_TIPS = {
 const BELIEF_LABELS = Object.fromEntries(BELIEF_OPTIONS.map(o => [o.key, o.label]));
 const beliefShort = k => BELIEF_LABELS[k] ? BELIEF_LABELS[k].split('：')[0] : k;
 
-/* 彩色标签色板：按文字 hash 取色，同一标签颜色固定 */
-const TAG_COLORS = [{
-  bg: '#e4ede2',
-  text: '#557055'
-}, {
-  bg: '#f3eadd',
-  text: '#8a6b47'
-}, {
-  bg: '#e2ebf2',
-  text: '#4d6a85'
-}, {
-  bg: '#f2e4ec',
-  text: '#8a5470'
-}, {
-  bg: '#eeeddf',
-  text: '#767051'
-}, {
-  bg: '#e7e4f1',
-  text: '#615889'
-}];
+/* 彩色标签配色：按文字 hash 固定颜色 */
+const TAG_COLORS = ['bg-[#e2ebe2] text-[#557055]', 'bg-[#e7e4f1] text-[#6a6390]', 'bg-[#f2e8e4] text-[#9a6f5f]', 'bg-[#e2ebf2] text-[#5f7d9a]', 'bg-[#f2f0e2] text-[#8a8555]', 'bg-[#f2e2ec] text-[#9a5f83]'];
 const tagColor = t => {
   let h = 0;
   for (let i = 0; i < t.length; i++) h = h * 31 + t.charCodeAt(i) >>> 0;
@@ -145,17 +127,12 @@ function Tag({
   }, "×"));
 }
 
-/* 卡片左上角彩色标签色块 */
+/* 彩色标签 */
 function ColorTag({
   children
 }) {
-  const c = tagColor(String(children));
   return /*#__PURE__*/React.createElement("span", {
-    className: "inline-block text-[11px] leading-5 px-2 rounded-md",
-    style: {
-      background: c.bg,
-      color: c.text
-    }
+    className: `inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full ${tagColor(children)}`
   }, children);
 }
 
@@ -326,6 +303,8 @@ function PracticePage({
   });
   const [showFactTip, setShowFactTip] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [savedId, setSavedId] = useState(null); // 本次保存的存档 id，用于发布标记
+
   const set = (k, v) => setForm(f => ({
     ...f,
     [k]: v
@@ -358,7 +337,19 @@ function PracticePage({
     };
     records.unshift(rec);
     store.set('sa_records', records);
+    setSavedId(rec.id);
     setStage('done');
+  };
+
+  /* 发布后把对应存档标记为「已发布社区」，防止重复发布 */
+  const markPublished = pid => {
+    if (!savedId) return;
+    const recs = store.get('sa_records', []).map(r => r.id === savedId ? {
+      ...r,
+      postId: pid,
+      publishedAt: Date.now()
+    } : r);
+    store.set('sa_records', recs);
   };
   const restart = () => {
     setForm({
@@ -418,11 +409,12 @@ function PracticePage({
       onClick: restart
     }, "新建一次觉察练习"))), publishOpen && /*#__PURE__*/React.createElement(PublishModal, {
       form: form,
-      onClose: () => setPublishOpen(false)
+      onClose: () => setPublishOpen(false),
+      onPublished: markPublished
     }));
   }
 
-  /* ---- 分步表单 ---- */
+  /* ---- 分步表单：纵向追加 + 步骤导航 ---- */
   return /*#__PURE__*/React.createElement("div", {
     className: "max-w-xl mx-auto px-4 py-10"
   }, /*#__PURE__*/React.createElement("div", {
@@ -593,9 +585,11 @@ function StepFooter({
 }
 
 /* ================= 发布到社区弹窗 ================= */
+const SECTION_FIELDS = [['event', '① 事件'], ['emotions', '② 情绪'], ['thoughts', '③ 想法与信念'], ['reflection', '④ 切换视角的思考'], ['reframe', '⑤ 重构后的想法'], ['action', '⑤ 微小行动']];
 function PublishModal({
   form,
-  onClose
+  onClose,
+  onPublished
 }) {
   const user = store.get('sa_user', null);
   const [isPublic, setIsPublic] = useState(true);
@@ -604,6 +598,14 @@ function PublishModal({
   const [allowComments, setAllowComments] = useState(true);
   const [showMusing, setShowMusing] = useState(true);
   const [title, setTitle] = useState(form.event ? form.event.split('\n')[0].slice(0, 30) : '');
+  const [sections, setSections] = useState({
+    event: true,
+    emotions: true,
+    thoughts: true,
+    reflection: true,
+    reframe: true,
+    action: true
+  });
   const [done, setDone] = useState(false);
   if (!user) {
     return /*#__PURE__*/React.createElement(Modal, {
@@ -619,8 +621,9 @@ function PublishModal({
   }
   const publish = () => {
     const posts = store.get('sa_posts', []);
+    const postId = uid();
     posts.unshift({
-      id: uid(),
+      id: postId,
       form: {
         ...form
       },
@@ -628,6 +631,7 @@ function PublishModal({
       title: title.trim() || (form.event ? form.event.split('\n')[0].slice(0, 30) : '觉察笔记'),
       musing: form.musing || '',
       showMusing,
+      visibleSections: sections,
       nickname: anonymous ? '匿名' : nickname.trim() || user.nickname,
       anonymous,
       allowComments,
@@ -638,6 +642,7 @@ function PublishModal({
       createdAt: Date.now()
     });
     store.set('sa_posts', posts);
+    if (onPublished) onPublished(postId);
     setDone(true);
   };
   return /*#__PURE__*/React.createElement(Modal, {
@@ -660,7 +665,24 @@ function PublishModal({
     onChange: e => setTitle(e.target.value),
     placeholder: "给这条觉察笔记起个标题……",
     className: "w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300"
-  })), /*#__PURE__*/React.createElement("label", {
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-sage-600"
+  }, "勾选需要对外公开展示的内容"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-x-3 gap-y-1.5"
+  }, SECTION_FIELDS.map(([k, label]) => /*#__PURE__*/React.createElement("label", {
+    key: k,
+    className: "flex items-center gap-2 text-xs cursor-pointer text-ink/80"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: sections[k],
+    onChange: e => setSections(s => ({
+      ...s,
+      [k]: e.target.checked
+    })),
+    className: "w-3.5 h-3.5 accent-sage-500"
+  }), label)))), /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-2.5 text-sm cursor-pointer"
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
@@ -697,7 +719,9 @@ function PublishModal({
     className: "w-4 h-4 accent-sage-500"
   }), "是否展示随想板块内容"), !showMusing && /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-soft -mt-2 ml-6"
-  }, "取消勾选后，社区公开帖子不展示随想内容，仅保留在你的个人存档内。"), /*#__PURE__*/React.createElement("div", {
+  }, "取消勾选后，社区公开帖子不展示随想内容，仅保留在你的个人存档内。"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-soft leading-relaxed bg-sage-50 border border-sage-100 rounded-xl p-3"
+  }, "本内容属于个人自我觉察记录，本站仅为自助练习工具，不能替代专业心理咨询。"), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-3 justify-center pt-2"
   }, /*#__PURE__*/React.createElement(Btn, {
     variant: "ghost",
@@ -714,16 +738,20 @@ function ArchivePage({
   const [records, setRecords] = useState(() => store.get('sa_records', []));
   const [editing, setEditing] = useState(null); // record being edited
   const [detailId, setDetailId] = useState(null); // 详情弹窗中的记录 id
+  const [confirmId, setConfirmId] = useState(null); // 待二次确认删除的记录 id
+  const [view, setView] = useState('list'); // list | tree
+  const [activeTag, setActiveTag] = useState(null); // null = 全部存档
 
   const persist = recs => {
     setRecords(recs);
     store.set('sa_records', recs);
   };
   const update = rec => persist(records.map(r => r.id === rec.id ? rec : r));
-  const remove = id => {
-    if (!confirm('确定删除这条觉察记录吗？')) return;
-    persist(records.filter(r => r.id !== id));
+  const remove = id => setConfirmId(id);
+  const doRemove = () => {
+    persist(records.filter(r => r.id !== confirmId));
     setDetailId(null);
+    setConfirmId(null);
   };
   const saveEdit = rec => {
     persist(records.map(r => r.id === rec.id ? {
@@ -732,20 +760,49 @@ function ArchivePage({
     } : r));
     setEditing(null);
   };
+
+  /* 默认按创建时间倒序，最新在前 */
+  const sorted = useMemo(() => [...records].sort((a, b) => b.createdAt - a.createdAt), [records]);
+  /* 从所有存档收集标签，生成筛选栏 */
+  const allTags = useMemo(() => [...new Set(records.flatMap(r => r.tags))], [records]);
+  const filtered = useMemo(() => activeTag ? sorted.filter(r => r.tags.includes(activeTag)) : sorted, [sorted, activeTag]);
   const detail = records.find(r => r.id === detailId) || null;
+  const chipCls = on => `px-3 py-1.5 rounded-full text-xs border transition-colors ${on ? 'bg-sage-100 text-sage-700 border-sage-300' : 'bg-white text-sage-600 border-sage-200 hover:bg-sage-50'}`;
   return /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto px-4 py-10"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-center mb-10"
+    className: "text-center mb-8"
   }, /*#__PURE__*/React.createElement("h1", {
     className: "font-serif text-2xl text-sage-700"
   }, "我的存档"), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-soft mt-3 leading-relaxed"
   }, user ? '登录用户：数据云端保存，可以跨设备访问，拥有社区发帖权限。' : '游客模式：数据保存在浏览器 LocalStorage，换设备 / 清缓存数据会丢失。登录后可云端同步。')), records.length === 0 ? /*#__PURE__*/React.createElement("p", {
     className: "text-center text-soft text-sm py-20"
-  }, "还没有觉察记录。去「觉察练习」写下第一条吧。") : /*#__PURE__*/React.createElement("div", {
+  }, "还没有觉察记录。去「觉察练习」写下第一条吧。") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2 mb-6"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActiveTag(null),
+    className: chipCls(!activeTag)
+  }, "全部存档"), allTags.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    onClick: () => setActiveTag(activeTag === t ? null : t),
+    className: chipCls(activeTag === t)
+  }, t)), /*#__PURE__*/React.createElement("span", {
+    className: "ml-auto flex gap-1.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setView('list'),
+    className: chipCls(view === 'list')
+  }, "列表"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setView('tree'),
+    className: chipCls(view === 'tree')
+  }, "成长树"))), view === 'tree' ? /*#__PURE__*/React.createElement(GrowthTree, {
+    records: filtered,
+    onOpen: id => setDetailId(id)
+  }) : filtered.length === 0 ? /*#__PURE__*/React.createElement("p", {
+    className: "text-center text-soft text-sm py-14"
+  }, "该标签下还没有存档。") : /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 sm:grid-cols-2 gap-5"
-  }, records.map(r => /*#__PURE__*/React.createElement("div", {
+  }, filtered.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.id,
     onClick: () => setDetailId(r.id),
     className: "bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm cursor-pointer hover:shadow-md hover:border-sage-200 transition-all flex flex-col"
@@ -774,8 +831,10 @@ function ArchivePage({
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-sage-500"
   }, "随想："), r.musing)), /*#__PURE__*/React.createElement("p", {
-    className: "mt-auto pt-3 text-[11px] text-soft"
-  }, fmtTime(r.createdAt), r.updatedAt !== r.createdAt && '（已编辑）')))), detail && /*#__PURE__*/React.createElement(ArchiveDetail, {
+    className: "mt-auto pt-3 text-[11px] text-soft flex items-center gap-2 flex-wrap"
+  }, fmtTime(r.createdAt), r.updatedAt !== r.createdAt && '（已编辑）', r.postId && /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] px-1.5 py-px rounded-full bg-sage-100 text-sage-600"
+  }, "已发布社区")))))), detail && /*#__PURE__*/React.createElement(ArchiveDetail, {
     record: detail,
     user: user,
     onUpdate: update,
@@ -789,10 +848,109 @@ function ArchivePage({
     onChange: setEditing,
     onSave: () => saveEdit(editing),
     onClose: () => setEditing(null)
+  }), confirmId && /*#__PURE__*/React.createElement(ConfirmModal, {
+    text: "确定删除这条觉察记录吗？删除后无法恢复。",
+    onCancel: () => setConfirmId(null),
+    onConfirm: doRemove
   }));
 }
 
-/* 存档详情弹窗：完整记录 + 随想板块 */
+/* 二次确认弹窗 */
+function ConfirmModal({
+  text,
+  onCancel,
+  onConfirm
+}) {
+  return /*#__PURE__*/React.createElement(Modal, {
+    onClose: onCancel
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-8 text-center space-y-5"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-ink leading-relaxed"
+  }, text), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-3 justify-center"
+  }, /*#__PURE__*/React.createElement(Btn, {
+    variant: "ghost",
+    onClick: onCancel
+  }, "取消"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: onConfirm
+  }, "确认删除"))));
+}
+
+/* 成长树视图：时间线 + 标签分类，可折叠，附简单统计（仅可视化展示，不做心理诊断） */
+function GrowthTree({
+  records,
+  onOpen
+}) {
+  const [collapsed, setCollapsed] = useState({});
+
+  /* 按标签分组，组内保持时间倒序 */
+  const groups = useMemo(() => {
+    const map = new Map();
+    records.forEach(r => {
+      const keys = r.tags.length ? r.tags : ['未标记'];
+      keys.forEach(t => {
+        if (!map.has(t)) map.set(t, []);
+        map.get(t).push(r);
+      });
+    });
+    return [...map.entries()];
+  }, [records]);
+
+  /* 标签分布统计 */
+  const tagStats = useMemo(() => {
+    const m = new Map();
+    records.forEach(r => r.tags.forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [records]);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-paper border border-sage-100 rounded-2xl p-5 shadow-sm space-y-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-sage-700"
+  }, "累计觉察 ", /*#__PURE__*/React.createElement("span", {
+    className: "font-serif text-lg"
+  }, records.length), " 次"), tagStats.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-x-3 gap-y-1.5"
+  }, tagStats.map(([t, n]) => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    className: "inline-flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement(ColorTag, null, t), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-soft"
+  }, "×", n))))), groups.map(([tag, recs]) => {
+    const isCollapsed = !!collapsed[tag];
+    return /*#__PURE__*/React.createElement("div", {
+      key: tag
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setCollapsed(c => ({
+        ...c,
+        [tag]: !isCollapsed
+      })),
+      className: "flex items-center gap-2 mb-3 w-full text-left"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `text-sage-400 text-xs transition-transform ${isCollapsed ? '' : 'rotate-90'}`
+    }, "▶"), /*#__PURE__*/React.createElement(ColorTag, null, tag), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs text-soft"
+    }, recs.length, " 条记录")), !isCollapsed && /*#__PURE__*/React.createElement("div", {
+      className: "ml-2 border-l-2 border-sage-100 pl-4 space-y-3"
+    }, recs.map(r => /*#__PURE__*/React.createElement("button", {
+      key: r.id,
+      onClick: () => onOpen(r.id),
+      className: "block w-full text-left bg-paper border border-sage-100 rounded-xl px-4 py-3 hover:border-sage-200 hover:shadow-sm transition-all"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] text-soft"
+    }, fmtTime(r.createdAt)), /*#__PURE__*/React.createElement("p", {
+      className: "font-serif text-sm text-ink leading-snug mt-0.5 line-clamp-1"
+    }, r.event ? r.event.split('\n')[0] : '觉察记录'), r.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1 mt-1.5"
+    }, r.tags.map(t => /*#__PURE__*/React.createElement(ColorTag, {
+      key: t
+    }, t)))))));
+  }));
+}
+
+/* 存档详情弹窗：完整记录 + 随想板块 + 发布入口 */
 function ArchiveDetail({
   record,
   user,
@@ -835,14 +993,23 @@ function ArchiveDetail({
     className: "flex flex-wrap gap-1.5"
   }, record.tags.map(t => /*#__PURE__*/React.createElement(ColorTag, {
     key: t
-  }, t))), /*#__PURE__*/React.createElement("button", {
+  }, t))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0"
+  }, user && !record.postId && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPublishOpen(true),
+    className: "text-xs px-3 py-1.5 rounded-full bg-sage-100 text-sage-700 hover:bg-sage-200 transition-colors"
+  }, "发布到社区"), record.postId && /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] px-2 py-1 rounded-full bg-sage-100 text-sage-600"
+  }, "已发布到社区"), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
-    className: "text-soft hover:text-ink text-lg leading-none shrink-0"
-  }, "×")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-soft hover:text-ink text-lg leading-none"
+  }, "×"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
     className: "font-serif text-xl text-ink leading-snug"
   }, record.event), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-soft mt-2"
-  }, fmtTime(record.createdAt), record.updatedAt !== record.createdAt && '（已编辑）')), /*#__PURE__*/React.createElement(RecordBody, {
+    className: "text-xs text-soft mt-2 flex items-center gap-2 flex-wrap"
+  }, fmtTime(record.createdAt), record.updatedAt !== record.createdAt && '（已编辑）', record.postId && /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] px-1.5 py-px rounded-full bg-sage-100 text-sage-600"
+  }, "已发布社区"))), /*#__PURE__*/React.createElement(RecordBody, {
     form: record
   }), /*#__PURE__*/React.createElement("div", {
     className: "space-y-2.5 pt-1"
@@ -887,30 +1054,34 @@ function ArchiveDetail({
   }, /*#__PURE__*/React.createElement(Btn, {
     variant: "ghost",
     onClick: onEdit
-  }, "编辑记录"), user && /*#__PURE__*/React.createElement(Btn, {
-    variant: "ghost",
-    onClick: () => setPublishOpen(true)
-  }, "发布到社区"), /*#__PURE__*/React.createElement("button", {
+  }, "编辑记录"), /*#__PURE__*/React.createElement("button", {
     onClick: onRemove,
     className: "text-xs text-red-300 hover:text-red-400 px-2"
   }, "删除记录"))), publishOpen && /*#__PURE__*/React.createElement(PublishModal, {
     form: record,
-    onClose: () => setPublishOpen(false)
+    onClose: () => setPublishOpen(false),
+    onPublished: pid => onUpdate({
+      ...record,
+      postId: pid,
+      publishedAt: Date.now()
+    })
   }));
 }
 function RecordBody({
-  form
+  form,
+  visible
 }) {
-  const rows = [['① 事件', form.event], ['② 情绪', form.emotions], ['③ 想法与信念', form.thoughts], ['④ 切换视角的思考', form.reflection], ['⑤ 重构后的想法', form.reframe], ['⑤ 微小行动', form.action]];
+  const show = k => !visible || visible[k] !== false;
+  const rows = [['① 事件', form.event, 'event'], ['② 情绪', form.emotions, 'emotions'], ['③ 想法与信念', form.thoughts, 'thoughts'], ['④ 切换视角的思考', form.reflection, 'reflection'], ['⑤ 重构后的想法', form.reframe, 'reframe'], ['⑤ 微小行动', form.action, 'action']];
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-3"
-  }, rows.map(([label, val]) => val && val.trim() && /*#__PURE__*/React.createElement("div", {
+  }, rows.map(([label, val, k]) => show(k) && val && val.trim() && /*#__PURE__*/React.createElement("div", {
     key: label
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-sage-500 mb-1"
   }, label), /*#__PURE__*/React.createElement("p", {
     className: "text-sm text-ink/90 leading-relaxed whitespace-pre-wrap"
-  }, val))), form.beliefs && form.beliefs.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+  }, val))), show('thoughts') && form.beliefs && form.beliefs.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-sage-500 mb-1.5"
   }, "③ 勾选的信念"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5"
@@ -922,7 +1093,9 @@ function EditModal({
   record,
   onChange,
   onSave,
-  onClose
+  onClose,
+  title,
+  onTitleChange
 }) {
   const set = (k, v) => onChange({
     ...record,
@@ -936,7 +1109,13 @@ function EditModal({
     className: "p-8 space-y-4"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "font-serif text-lg text-sage-700 text-center"
-  }, "编辑觉察记录"), fields.map(([k, label]) => /*#__PURE__*/React.createElement("div", {
+  }, "编辑"), onTitleChange && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs text-sage-600 mb-1.5"
+  }, "帖子标题"), /*#__PURE__*/React.createElement("input", {
+    value: title,
+    onChange: e => onTitleChange(e.target.value),
+    className: "w-full bg-white border border-sage-100 rounded-xl px-4 py-2.5 text-sm focus:border-sage-300"
+  })), fields.map(([k, label]) => /*#__PURE__*/React.createElement("div", {
     key: k
   }, /*#__PURE__*/React.createElement("label", {
     className: "block text-xs text-sage-600 mb-1.5"
@@ -963,11 +1142,31 @@ function CommunityPage({
   const [posts, setPosts] = useState(() => store.get('sa_posts', []));
   const [query, setQuery] = useState('');
   const [detailId, setDetailId] = useState(null);
+  const [editingPost, setEditingPost] = useState(null); // { id, title, form }
+  const [confirmId, setConfirmId] = useState(null); // 待二次确认删除的帖子 id
+
   const persist = ps => {
     setPosts(ps);
     store.set('sa_posts', ps);
   };
   const updatePost = np => persist(posts.map(x => x.id === np.id ? np : x));
+  const removePost = () => {
+    persist(posts.filter(p => p.id !== confirmId));
+    setDetailId(null);
+    setConfirmId(null);
+  };
+  const savePostEdit = () => {
+    persist(posts.map(p => p.id === editingPost.id ? {
+      ...p,
+      title: editingPost.title.trim() || p.title,
+      form: {
+        ...editingPost.form
+      }
+    } : p));
+    setEditingPost(null);
+  };
+
+  /* 按发布时间倒序，最新发布在前 */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return posts.filter(p => {
@@ -975,7 +1174,7 @@ function CommunityPage({
       if (!q) return true;
       const hay = [postTitle(p), p.nickname, p.form.event, p.form.emotions, p.form.thoughts, p.form.reflection, p.form.reframe, p.form.action, p.showMusing !== false ? p.musing || '' : '', ...(p.form.beliefs || []).map(k => BELIEF_LABELS[k])].join(' ').toLowerCase();
       return hay.includes(q);
-    });
+    }).sort((a, b) => b.createdAt - a.createdAt);
   }, [posts, query]);
   const report = id => {
     if (!confirm('确定举报这条笔记吗？')) return;
@@ -1064,7 +1263,32 @@ function CommunityPage({
     user: user,
     onUpdate: updatePost,
     onReport: () => report(detail.id),
-    onClose: () => setDetailId(null)
+    onClose: () => setDetailId(null),
+    onEdit: () => setEditingPost({
+      id: detail.id,
+      title: postTitle(detail),
+      form: {
+        ...detail.form
+      }
+    }),
+    onDelete: () => setConfirmId(detail.id)
+  }), editingPost && /*#__PURE__*/React.createElement(EditModal, {
+    record: editingPost.form,
+    title: editingPost.title,
+    onTitleChange: t => setEditingPost({
+      ...editingPost,
+      title: t
+    }),
+    onChange: f => setEditingPost({
+      ...editingPost,
+      form: f
+    }),
+    onSave: savePostEdit,
+    onClose: () => setEditingPost(null)
+  }), confirmId && /*#__PURE__*/React.createElement(ConfirmModal, {
+    text: "确定删除这条社区帖子吗？删除后无法恢复。",
+    onCancel: () => setConfirmId(null),
+    onConfirm: removePost
   }));
 }
 
@@ -1074,7 +1298,9 @@ function PostDetail({
   user,
   onUpdate,
   onReport,
-  onClose
+  onClose,
+  onEdit,
+  onDelete
 }) {
   const isOwner = user && user.email === post.owner;
   return /*#__PURE__*/React.createElement(Modal, {
@@ -1101,11 +1327,20 @@ function PostDetail({
     className: "text-xs text-ink/80"
   }, post.nickname), /*#__PURE__*/React.createElement("span", {
     className: "text-[11px] text-soft"
-  }, fmtTime(post.createdAt)), /*#__PURE__*/React.createElement("button", {
+  }, fmtTime(post.createdAt)), /*#__PURE__*/React.createElement("span", {
+    className: "ml-auto flex items-center gap-3"
+  }, isOwner && /*#__PURE__*/React.createElement("button", {
+    onClick: onEdit,
+    className: "text-[11px] text-sage-500 hover:text-sage-700"
+  }, "编辑"), isOwner && /*#__PURE__*/React.createElement("button", {
+    onClick: onDelete,
+    className: "text-[11px] text-red-300 hover:text-red-400"
+  }, "删除"), /*#__PURE__*/React.createElement("button", {
     onClick: onReport,
-    className: "text-[11px] text-soft hover:text-red-400 ml-auto"
-  }, "举报"))), /*#__PURE__*/React.createElement(RecordBody, {
-    form: post.form
+    className: "text-[11px] text-soft hover:text-red-400"
+  }, "举报")))), /*#__PURE__*/React.createElement(RecordBody, {
+    form: post.form,
+    visible: post.visibleSections
   }), post.showMusing !== false && post.musing && post.musing.trim() && /*#__PURE__*/React.createElement("div", {
     className: "bg-sage-50/70 border border-sage-100 rounded-2xl p-5"
   }, /*#__PURE__*/React.createElement("p", {
